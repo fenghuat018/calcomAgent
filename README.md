@@ -1,29 +1,50 @@
 # calcomAgent
 
-A Python starter for the [OpenAI Agents SDK](https://developers.openai.com/api/docs/guides/agents/quickstart). The example runs one scheduling assistant in the terminal and includes a separate Cal.com API check.
+A terminal scheduling assistant with five agents for intake, booking changes, retrieval, clarification, and recovery. See the [scheduling specification](spec.md) and [agent creation plan](plan/agent-creation-plan.md).
 
 ## Setup
 
-Use Python 3.10 or newer. The commands below use Python 3.13.
+Use Python 3.10 or newer.
 
 ```sh
-python3.13 -m venv .venv
+python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 ```
 
-Add `OPENAI_API_KEY` to `.env` at the repo root using a key from the [OpenAI API keys page](https://platform.openai.com/api-keys). Set `OPENAI_MODEL` if you want to override the default `gpt-5-mini`. Shell environment variables take precedence over `.env` values.
+Set the following values in the shell or in a local `.env` file.
 
-If your IDE flags `from agents import ...` as unresolved, select `.venv/bin/python` as the project's existing Python interpreter. The SDK's package name is `openai-agents` and its import name is `agents`.
+```dotenv
+OPENAI_API_KEY=your_openai_key
+CALCOM_API_KEY=your_calcom_key
+CALCOM_EVENT_TYPES='[{"id":42,"name":"Consultation","duration_minutes":30,"required_fields":["topic"]}]'
+```
 
-Run the connectivity check or pass your own prompt.
+Use the IDs and booking fields of event types already configured in the authorized Cal.com account. Each event definition can also specify `supported_durations` as a list of minutes, `location_required` as a boolean, and `locations` as a mapping from display names to Cal.com location objects.
+
+Optional defaults are `CALCOM_TIME_ZONE` (an IANA zone), `CALCOM_ATTENDEE_NAME`, and `CALCOM_ATTENDEE_EMAIL`. Set `OPENAI_MODEL` to override `gpt-5-mini`.
+
+## Run
 
 ```sh
 .venv/bin/python main.py
-.venv/bin/python main.py "Draft a note asking to reschedule a 30-minute meeting."
+.venv/bin/python main.py "List bookings tomorrow in America/New_York"
 ```
 
-Set `CALCOM_API_KEY` in `.env` to verify Cal.com separately. The check uses the read-only [profile endpoint](https://cal.com/docs/api-reference/v2/me/get-my-profile) and prints only the check result.
+The terminal stays open for answers to scheduling questions. To resume a recoverable task, enter `resume <task-id>` in the same process. After a restart, enter `resume <task-id> <booking-uid-or-id>` to fetch the current booking from Cal.com. Use `--once` for a single turn.
+
+## Verify offline
 
 ```sh
-.venv/bin/python main.py --check-calcom
+CALCOM_TEST_ADAPTER=test.adapter:make_driver .venv/bin/python -m unittest discover -s test -v
 ```
+
+The acceptance tests use the SDK runner, a controlled interpreter, and a Cal.com HTTP stub. See the [test adapter contract](test/README.md).
+
+## Verify online
+
+```sh
+CALCOM_TEST_ADAPTER=test.adapter:make_online_driver .venv/bin/python -m unittest discover -s test -v
+.venv/bin/python -m unittest test.live_calcom -v
+```
+
+The acceptance suite sends synthetic prompts to the configured OpenAI model and uses controlled Cal.com responses for scheduling scenarios. The second command checks the configured Cal.com account with authenticated reads. Set `CALCOM_LIVE_EVENT_TYPE_ID` to choose the event type for the availability check.

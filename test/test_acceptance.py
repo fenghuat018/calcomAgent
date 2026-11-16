@@ -41,6 +41,8 @@ class SchedulingAcceptance(TestCase):
         self.calcom = CalComStub()
         self.environment = Environment(self.calcom)
         self.driver = factory(self.environment)
+        if close := getattr(self.driver, "close", None):
+            self.addCleanup(close)
 
     def assertStatus(self, turn, status):
         self.assertEqual(turn.status, status, turn.message)
@@ -210,6 +212,29 @@ class SchedulingAcceptance(TestCase):
         self.assertEqual(result.bookings, ())
         self.assertHandoff(result, "retrieval", "confirmation")
 
+    def test_ambiguous_get_resumes_retrieval_after_choice(self):
+        self.set_original()
+        self.calcom.bookings["other-uid"] = booking("other-uid", utc(5, 16), numeric_id=102)
+        first = self.driver.turn("Show details for my call with Alex on November 5, America/New_York.")
+        self.assertStatus(first, "awaiting_input")
+        result = self.driver.turn("The 11 AM one.")
+        self.assertStatus(result, "completed")
+        self.assertEqual(result.task_id, first.task_id)
+        self.assertHandoff(result, "confirmation", "retrieval")
+        self.assertEqual([item.uid for item in result.bookings], ["other-uid"])
+        self.assertEqual(self.calcom.writes, [])
+
+    def test_unclear_intent_is_clarified_then_routed_through_triage(self):
+        first = self.driver.turn("I need help with my schedule.")
+        self.assertStatus(first, "awaiting_input")
+        self.assertHandoff(first, "triage", "confirmation")
+        result = self.driver.turn(f"List bookings for {RANGE}.")
+        self.assertStatus(result, "completed")
+        self.assertEqual(result.task_id, first.task_id)
+        self.assertHandoff(result, "confirmation", "triage")
+        self.assertHandoff(result, "triage", "retrieval")
+        self.assertEqual(self.calcom.writes, [])
+
     def test_vague_cancel_resolves_and_rereads_before_write(self):
         self.set_original()
         result = self.driver.turn("Cancel my call with Alex on November 5, America/New_York.")
@@ -351,6 +376,36 @@ class SchedulingAcceptance(TestCase):
         self.assertEqual(result.bookings[0].uid, "original-uid")
         self.assertEqual(result.bookings[0].status, "cancelled")
         self.assertCancelledOnce()
+
+    def test_cancel_readback_reports_an_independent_change_without_a_second_write(self):
+        self.set_original()
+
+        def change_booking(request):
+            self.calcom.bookings["original-uid"] = booking("original-uid", utc(5, 16))
+            raise TimeoutError("Provider outcome unknown")
+
+        self.calcom.script("POST", CANCEL, change_booking)
+        result = self.driver.turn("Cancel booking original-uid.")
+        self.assertStatus(result, "recoverable")
+        self.assertHandoff(result, "recovery", "confirmation")
+        self.assertIn("changed booking details", result.message)
+        self.assertEqual(result.bookings[0].slot.start, utc(5, 16))
+        self.assertEqual(len(self.calcom.writes), 1)
+
+    def test_definitively_rate_limited_create_returns_to_booking_after_recheck(self):
+        self.calcom.slots = [half_hour(utc(5, 15))]
+        self.calcom.script("POST", BOOKINGS, error(429, "Rate limited"))
+        result = self.driver.turn(CREATE)
+        self.assertStatus(result, "completed")
+        self.assertHandoff(result, "recovery", "booking")
+        first, second = self.calcom.writes
+        self.assertEqual(first.body["metadata"], second.body["metadata"])
+        self.assertIn(SLOTS, [
+            request.path for request in self.calcom.requests[
+                self.calcom.requests.index(first) + 1 : len(self.calcom.requests) - 1
+            ]
+        ])
+        self.assertEqual(len(self.calcom.bookings), 1)
 
     def test_unresolved_create_does_not_claim_unrelated_matching_booking_or_retry_post(self):
         self.calcom.slots = [half_hour(utc(5, 15))]

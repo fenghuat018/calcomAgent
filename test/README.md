@@ -14,6 +14,21 @@ The application scenarios are skipped until a test adapter is configured. An inv
 CALCOM_TEST_ADAPTER=your_adapter_module:make_driver python -m unittest discover -s test -v
 ```
 
+## Built-in adapters
+
+```sh
+CALCOM_TEST_ADAPTER=test.adapter:make_driver python -m unittest discover -s test -v
+CALCOM_TEST_ADAPTER=test.adapter:make_online_driver python -m unittest discover -s test -v
+```
+
+The first command uses a controlled interpreter. The second uses `OPENAI_API_KEY` and the configured `OPENAI_MODEL` for the acceptance scenarios. Both use the Cal.com stub so they can reproduce conflicts, rate limits, and lost responses. The adapter closes the OpenAI client and keeps a single event loop across each scenario's turns.
+
+Run the provider read checks separately with your configured `CALCOM_API_KEY`.
+
+```sh
+python -m unittest test.live_calcom -v
+```
+
 ## Adapter contract
 
 - `make_driver(environment)` returns a driver implementing `turn(message)` and `resume(task_id)`. Construct one workflow instance per scenario and reuse it for both methods so task and conversation state stay in memory. `turn` sends the original text through the application's conversation entry point. `resume` recovers the existing in-memory task without a new scheduling instruction.
