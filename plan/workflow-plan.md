@@ -1,0 +1,35 @@
+# Workflow plan
+
+[Scheduling specification](../spec.md) · [Context data plan](context-data-plan.md) · [Tool creation plan](tool-creation-plan.md) · [Agent creation plan](agent-creation-plan.md)
+
+## Application entry points
+
+Add a workflow service in `workflow.py` and connect it to the repository's planned terminal entry point in `main.py`. The service accepts a user message and conversation identity, retrieves the account's conversation context from memory, and runs the SDK with bounded turns. Keep one service instance for the interactive session. Inject Cal.com transport, model, current time, and retry delay at the service boundary.
+
+Start a new task at Triage. Match a reply to a saved question using the conversation and reply context, then start the next SDK run at Confirmation with the same task and session. If there are several plausible pending questions, ask which task the reply addresses. When the user makes an unrelated request, open a new task. A recovery entry point takes a saved task ID, checks the scope and checkpoint, and starts Recovery when work can continue. Present structured outcomes with a task reference and the actual user-facing message. Return `awaiting_input` for clarification, `not_found` after a complete target search with no match, `incomplete` for a partially read list, and `recoverable` for an unresolved operation. Return `completed` for verified success, including empty availability or list results. Render dates and times in the task's display time zone.
+
+## Implement the six intent flows
+
+| Intent | Sequence and completion |
+| --- | --- |
+| Create booking | Validate the event type, attendee details, event-required fields, and chosen start. Confirmation asks only for missing values or a slot selection. Booking asks Retrieval to check availability and rechecks a selected alternative before writing. On conflict, refresh the same event type and duration within the requested window or the rest of the local day for an exact-time request. Return the verified booking UID, time, and provider status. |
+| List bookings | Read all authorized pages using Retrieval. Merge by occurrence UID and sort by start. Include bookings overlapping the half-open range, with pending bookings labeled and cancelled or rejected entries included on request. Apply exact range and status filters to the combined results. Resume a failed page at its cursor and surface incompleteness if recovery is exhausted. |
+| Get booking | Use an explicit opaque UID directly. For a numeric ID or a vague reference, search authorized records using the supplied clues. With a unique reliable match, get current detail by opaque UID. With multiple matches or weak evidence, ask for a distinguishing detail or present choices. Distinguish a completed search with zero matches from an incomplete lookup. |
+| Cancel booking | Use the same reference resolution. Re-read the selected occurrence by UID before writing and ask again if material details changed. A unique, current match with explicit cancellation intent can proceed. Report an already-cancelled booking from the verified read. Confirm a new cancellation from the response or a read-back. |
+| Reschedule booking | Resolve and refresh the original. Build and validate the replacement using original details and requested changes. Return the current booking for the identical slot and details. Check the replacement before cancelling, save the plan, verify cancellation, and then create the replacement. Record and return the old and new bookings. If creation fails, surface the cancelled original and resume at the replacement step when safe. |
+| Get availability | Resolve the event type, requested time range, display zone, and duration if necessary. Return the complete sorted set of slots that fit the range. Distinguish a successful empty result from a provider failure. Recheck a slot if the user later selects it for a booking. |
+
+Resolve relative dates with the injected clock and the user's explicit or saved IANA time zone. Convert date-only boundaries from local time to UTC and require a positive range. Ask for clarification on ambiguous or nonexistent local times, including daylight-saving transitions. For booking lists, include overlapping intervals even if they start before the range. For availability, require the full slot to fit inside the range.
+
+## Recovery and continuation
+
+1. Handle expected Cal.com failures through the current specialist's handoff to Recovery. If the SDK run fails before a handoff, save the failure in memory and resume from the last checkpoint through the recovery entry point. A write recorded as in flight enters reconciliation. After a process restart, use a fresh Cal.com lookup to reestablish the booking state when a user refers to an old task.
+2. Allow up to two additional attempts for temporary read failures and definitively unapplied transient writes. Use capped exponential backoff with jitter and honor `Retry-After`. Save the next permitted attempt time on the task if it exceeds the interaction budget. For invalid user input or a slot conflict, go through Confirmation with the corrected field or fresh alternatives. Surface authorization and configuration errors as actionable outcomes.
+3. For uncertain cancellation, read the original UID and verify the provider state. If Cal.com shows an independent change, present the current state through Confirmation. For uncertain creation, search by event type, attendee, and time and verify the exact operation marker from metadata. A unique marker match adopts that booking. An uncertain outcome stays recoverable and blocks another write for the operation.
+4. For a partial reschedule, keep the original cancellation checkpoint and report whether the replacement was verified, definitively rejected, or remains uncertain. If a rejected destination has been taken, give the user fresh alternatives. Assign a new operation ID when the user chooses a different slot after the prior create outcome is definitive. Recreating the old slot requires a new booking choice and a fresh availability check.
+
+## Implementation order and acceptance
+
+1. Build the context records and in-memory conversation state first. Build the Cal.com client and tools against those contracts, then create the least-privilege agent definitions and wire the workflow entry points.
+2. Exercise the read intents, then create and cancel, then the multi-step reschedule. Verify clarification and recovery across turns in the same process through real SDK handoffs.
+3. Supply the [test adapter](../test/README.md#adapter-contract) with the offline Cal.com stub, controlled SDK model, and fixed clock. Reuse one running workflow instance for each scenario. Map the actual outcomes and handoff events to the suite. Run `python -m unittest discover -s test -v` with `CALCOM_TEST_ADAPTER` set and verify all application scenarios execute. Review the full [specification acceptance criteria](../spec.md#acceptance-criteria), including DST clarification, failed pagination, ambiguity, partial reschedules, and prevention of duplicate writes when recovery resumes.

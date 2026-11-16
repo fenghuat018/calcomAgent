@@ -1,8 +1,6 @@
 """Run the scheduling specification through the application's public workflow."""
 
 from datetime import timedelta
-from pathlib import Path
-from tempfile import TemporaryDirectory
 from unittest import TestCase
 from zoneinfo import ZoneInfo
 
@@ -37,14 +35,12 @@ def half_hour(start):
 
 class SchedulingAcceptance(TestCase):
     def setUp(self):
-        self.factory = load_factory()
-        if self.factory is None:
+        factory = load_factory()
+        if factory is None:
             self.skipTest("Set CALCOM_TEST_ADAPTER=module:factory after implementing the workflow")
-        state = TemporaryDirectory()
-        self.addCleanup(state.cleanup)
         self.calcom = CalComStub()
-        self.environment = Environment(self.calcom, Path(state.name))
-        self.driver = self.factory(self.environment)
+        self.environment = Environment(self.calcom)
+        self.driver = factory(self.environment)
 
     def assertStatus(self, turn, status):
         self.assertEqual(turn.status, status, turn.message)
@@ -338,19 +334,18 @@ class SchedulingAcceptance(TestCase):
         self.assertHandoff(first, "booking", "recovery")
         self.assertEqual([request.path for request in self.calcom.writes], [operation])
         self.calcom.unavailable_reads.clear()
-        self.driver = self.factory(self.environment)
         result = self.driver.resume(first.task_id)
         self.assertStatus(result, "completed")
         self.assertEqual(result.task_id, first.task_id)
         self.assertEqual([request.path for request in self.calcom.writes], [operation])
         return result
 
-    def test_lost_create_response_is_reconciled_after_restart(self):
+    def test_lost_create_response_is_reconciled_on_resume(self):
         self.calcom.slots = [half_hour(utc(5, 15))]
         result = self.check_lost_response(BOOKINGS, CREATE, BOOKINGS)
         self.assertEqual([result.bookings[0].uid], list(self.calcom.bookings))
 
-    def test_lost_cancel_response_is_reconciled_after_restart(self):
+    def test_lost_cancel_response_is_reconciled_on_resume(self):
         self.set_original()
         result = self.check_lost_response(CANCEL, "Cancel booking original-uid.", ORIGINAL)
         self.assertEqual(result.bookings[0].uid, "original-uid")
@@ -367,9 +362,9 @@ class SchedulingAcceptance(TestCase):
         self.calcom.script("POST", BOOKINGS, timeout_with_unrelated_booking)
         first = self.driver.turn(CREATE)
         self.assertStatus(first, "recoverable")
-        self.driver = self.factory(self.environment)
         result = self.driver.resume(first.task_id)
         self.assertStatus(result, "recoverable")
+        self.assertEqual(result.task_id, first.task_id)
         self.assertEqual(result.bookings, ())
         self.assertEqual([request.path for request in self.calcom.writes], [BOOKINGS])
 

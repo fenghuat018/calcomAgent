@@ -6,7 +6,6 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from importlib import import_module
-from pathlib import Path
 from typing import Callable, Protocol
 
 
@@ -239,7 +238,6 @@ class CalComStub:
 @dataclass(frozen=True)
 class Environment:
     calcom: CalComStub
-    state_directory: Path
     now: datetime = utc(2, 12)
     conversation_id: str = "acceptance-conversation"
     api_key: str = TOKEN
