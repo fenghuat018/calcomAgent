@@ -11,6 +11,10 @@ from scheduling_agents.outcomes import booking_label, finish
 from scheduling_agents.state import ask, finish_write, logger, read_for, record_failure
 
 
+# These values are returned with bookings but are sent separately when creating one.
+STANDARD_BOOKING_RESPONSES = frozenset({"name", "email", "displayEmail", "location"})
+
+
 def availability_query(ctx: WorkflowContext, event, duration: int) -> dict:
     task = ctx.task
     query = {"eventTypeId": event.id, "timeZone": task.time_zone}
@@ -33,7 +37,8 @@ def alternatives(ctx: WorkflowContext, query: dict, *, purpose="alternatives") -
 
 def prepare_booking(ctx: WorkflowContext):
     task, account = ctx.task, ctx.account
-    resolve_input_times(task, ctx.clock())
+    now = ctx.clock()
+    resolve_input_times(task, now)
     request = task.inputs
     original = task.target_booking
     cancellation = task.writes.get("cancel_booking")
@@ -100,7 +105,8 @@ def prepare_booking(ctx: WorkflowContext):
         if (request.location or event.location_required) and location is None:
             missing.append("location")
     if missing:
-        return ask(task, "booking", "prepare_booking", fields=tuple(missing))
+        return ask(task, "booking", "prepare_booking", fields=tuple(missing),
+                   event_names=tuple(item.name for item in account.event_types))
 
     bounds = interval(request.range_start, request.range_end, zone)
     if (request.range_start or request.range_end) and not bounds:
@@ -120,20 +126,29 @@ def prepare_booking(ctx: WorkflowContext):
         task.selected_slot = None
         if bounds and not request.start:
             return read_for(task, Read("get_availability", "alternatives", query, bounds=bounds))
-        return ask(task, "booking", "prepare_booking", fields=("start",))
+        return ask(task, "booking", "prepare_booking", fields=("start",), message=(
+            f"Give a date and an exact start time in {zone.key}, such as “tomorrow at 10 AM”."
+        ))
 
     slot = Slot(starts[0], starts[0] + timedelta(minutes=duration))
     if bounds and (slot.start < bounds.start or slot.end > bounds.end):
         return ask(task, "booking", "prepare_booking", fields=("range",))
-    if slot.start < ctx.clock() and (not original or slot != original.slot):
-        return ask(task, "booking", "prepare_booking", fields=("start",), message="What future time would you like?")
+    if slot.start < now and (not original or slot != original.slot):
+        date_format = "%b %d, %Y at %I:%M %p (%Z)"
+        requested = slot.start.astimezone(zone).strftime(date_format)
+        current = now.astimezone(zone).strftime(date_format)
+        return ask(task, "booking", "prepare_booking", fields=("start",), message=(
+            f"{requested} has already passed. It’s now {current} in {zone.key}. "
+            "Reply with a later date and time, such as “tomorrow at 10 AM”."
+        ))
     task.selected_slot = slot
     payload = {
         "start": iso(slot.start), "eventTypeId": event.id,
         "attendee": {"name": attendee_name, "email": attendee_email, "timeZone": attendee_zone.key},
     }
-    if fields:
-        payload["bookingFieldsResponses"] = fields
+    custom_responses = {key: value for key, value in fields.items() if key not in STANDARD_BOOKING_RESPONSES}
+    if custom_responses:
+        payload["bookingFieldsResponses"] = custom_responses
     if event.supported_durations:
         payload["lengthInMinutes"] = duration
     if location:
@@ -156,10 +171,8 @@ def prepare_booking(ctx: WorkflowContext):
 
 
 def plan_cancel(task: Task, booking: Booking):
-    body = {"cancelSubsequentBookings": False}
-    if task.inputs.cancellation_reason:
-        body["cancellationReason"] = task.inputs.cancellation_reason
-    plan_write(task, "cancel_booking", body, booking.calcom_uid)
+    reason = (task.inputs.cancellation_reason or "").strip() or "Cancellation requested."
+    plan_write(task, "cancel_booking", {"cancellationReason": reason}, booking.calcom_uid)
 
 
 def plan_write(task: Task, kind, body: dict, uid: str | None = None):

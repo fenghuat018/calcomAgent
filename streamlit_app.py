@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import streamlit as st
 
-from scheduling_agents.outcomes import FIELD_NAMES, booking_label, interval_label
+from scheduling_agents.outcomes import booking_label, interval_label
 from streamlit_runtime import ConfigurationError, WorkflowBridge, get_workflow
 from workflow_context import Account, Booking, Outcome
 
@@ -60,14 +60,12 @@ def render_booking(booking: Booking, time_zone: str | None, account: Account, ti
 
 def render_details(outcome: Outcome, workflow: WorkflowBridge):
     st.caption(STATUS_LABELS[outcome.status])
-    if outcome.status != "completed" or not (outcome.bookings or outcome.slots or outcome.original):
+    if outcome.missing_fields:
+        st.text(outcome.message)
+    elif outcome.status != "completed" or not (outcome.bookings or outcome.slots or outcome.original):
         st.text(outcome.message.splitlines()[0])
     if outcome.time_zone:
         st.caption(f"Time zone · {outcome.time_zone}")
-    if outcome.missing_fields:
-        st.markdown("**What’s needed**")
-        for name in outcome.missing_fields:
-            st.text(FIELD_NAMES.get(name, name.removeprefix("bookingFieldsResponses.")))
 
     if outcome.question_key and (outcome.candidates or outcome.slots):
         labels = [booking_label(item, outcome.time_zone) for item in outcome.candidates] or [

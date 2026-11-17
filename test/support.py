@@ -187,6 +187,9 @@ class CalComStub:
             if route[0] == "POST" and action == "cancel":
                 if uid not in self.bookings:
                     return error(404, "Booking not found")
+                reason = request.body.get("cancellationReason")
+                if not isinstance(reason, str) or not reason.strip():
+                    return error(400, "Cancellation reason is required")
                 self.bookings[uid] = {**self.bookings[uid], "status": "cancelled"}
                 return success(self.bookings[uid])
         raise AssertionError(f"Unexpected Cal.com request {route}")

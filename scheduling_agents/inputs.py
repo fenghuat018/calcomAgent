@@ -11,6 +11,16 @@ EMAIL = re.compile(r"[^\s@]+@[^\s@]+\.[^\s@]+\Z")
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}\Z")
 RELATIVE_DATE = re.compile(r"D([+-]\d{1,3})(T\d{2}:\d{2}(?::\d{2})?)?\Z")
 TIME_FIELDS = ("start", "range_start", "range_end", "target_start", "target_end")
+INTENT_PREFIX = r"^\s*(?:(?:please|(?:can|could|would) you)\s+)*"
+BOOKING_DETAIL_REQUEST = re.compile(
+    INTENT_PREFIX
+    + r"(?:(?:check|show(?: me)?|get|find|look up|tell me)\s+(?:the\s+)?details?\b"
+    r"|when and where\b"
+    r"|(?:what(?:['’]s| is)|tell me)\s+(?:the\s+)?(?:time|date|location|link)\s+(?:of|for)\b"
+    r"|(?:tell me\s+)?(?:what\s+(?:time|day|date)|when|where)\s+"
+    r"(?:is|was|does|did)\s+.*\b(?:booking|meeting|appointment|call|event)\b)",
+    re.I,
+)
 WRITE_VERBS = {
     "create_booking": r"book|schedule|set up|arrange|reserve|make (?:a|the) (?:booking|appointment)",
     "cancel_booking": r"cancel|call off|remove|delete",

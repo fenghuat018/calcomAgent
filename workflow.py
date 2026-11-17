@@ -12,7 +12,7 @@ from agents.items import TResponseInputItem
 
 from tools.calcom_client import CalCom, UID, https_request
 from scheduling_agents import create_agents
-from scheduling_agents.inputs import source_contains, zone_for
+from scheduling_agents.inputs import BOOKING_DETAIL_REQUEST, source_contains, zone_for
 from scheduling_agents.outcomes import finish
 from workflow_context import Account, HandoffEvent, Outcome, Proposal, Role, Task, WorkflowContext
 
@@ -121,6 +121,11 @@ class SchedulingWorkflow:
     ):
         ctx = conversation.context
         pending = [task for task in ctx.tasks.values() if task.status == "awaiting_input"]
+        clarifying_intent = len(pending) == 1 and pending[0].pending.fields == ("intent",)
+        previous = ctx.tasks.get(conversation.most_recent)
+        focused = previous if previous and previous.status == "awaiting_input" else None
+        reference, *answer = message.split(maxsplit=1)
+        addressed = next((item for item in pending if item.id == reference.casefold()), None)
         linked = [
             task for task in pending
             if source_contains(message, task.id)
@@ -137,24 +142,32 @@ class SchedulingWorkflow:
             task = ctx.tasks.get(reply_to)
             if not task or task.status != "awaiting_input":
                 return Outcome(reply_to, "not_found", "No open scheduling question has that task reference.")
+        elif addressed:
+            task = addressed
+        elif BOOKING_DETAIL_REQUEST.match(message) and not clarifying_intent:
+            task = None
         elif len(linked) == 1:
             task = linked[0]
         elif len(linked) > 1 or pending and not (
             NEW_REQUEST.match(message) and not REFERENCE.search(message)
-            and not (len(pending) == 1 and pending[0].pending.fields == ("intent",))
+            and not clarifying_intent
         ):
-            if len(pending) == 1:
+            if focused and not linked:
+                task = focused
+            elif len(pending) == 1:
                 task = pending[0]
             else:
                 options = "\n".join(f"{item.id} — {item.pending.message.splitlines()[0]}" for item in pending)
-                return Outcome(uuid4().hex, "awaiting_input", f"Which task are you answering? Include its reference.\n{options}")
+                return Outcome(
+                    uuid4().hex, "awaiting_input",
+                    f"Which task are you answering? Enter its reference to reopen the question.\n{options}",
+                )
         else:
             task = None
 
         ctx.referenced_uid = None
         ctx.referenced_availability = None
         if task is None:
-            previous = ctx.tasks.get(conversation.most_recent)
             if previous and previous.outcome and previous.outcome.status == "completed" and REFERENCE.search(message):
                 entries = previous.outcome.bookings
                 if len(entries) == 1:
@@ -171,6 +184,11 @@ class SchedulingWorkflow:
             ctx.tasks[task.id] = task
             role = "triage"
         else:
+            if task is addressed:
+                if not answer:
+                    conversation.most_recent = task.id
+                    return replace(task.outcome, handoffs=())
+                message = answer[0]
             task.message = message
             task.transition("confirmation", "save_answer")
             role = "confirmation"
@@ -188,6 +206,8 @@ class SchedulingWorkflow:
                     "This process has no matching task. Provide its booking UID or numeric ID for a fresh lookup.",
                 )
             if task.status not in ("recoverable", "incomplete"):
+                if task.status == "awaiting_input":
+                    conversation.most_recent = task.id
                 return replace(task.outcome, handoffs=())
             operation = task.failed_operation
             if operation and operation.retry_at and self.clock() < operation.retry_at:

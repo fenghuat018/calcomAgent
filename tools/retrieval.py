@@ -35,7 +35,8 @@ def prepare_retrieval(ctx: WorkflowContext):
         ):
             missing.append("lengthInMinutes")
         if missing:
-            return ask(task, "retrieval", "prepare_retrieval", fields=tuple(missing))
+            return ask(task, "retrieval", "prepare_retrieval", fields=tuple(missing),
+                       event_names=tuple(item.name for item in account.event_types))
         query = {"eventTypeId": event.id, "timeZone": zone.key}
         if event.supported_durations and request.duration:
             query["duration"] = request.duration
@@ -53,7 +54,8 @@ def prepare_retrieval(ctx: WorkflowContext):
         if request.event_type and not event:
             missing.append("eventTypeId")
         if missing:
-            return ask(task, "retrieval", "prepare_retrieval", fields=tuple(missing))
+            return ask(task, "retrieval", "prepare_retrieval", fields=tuple(missing),
+                       event_names=tuple(item.name for item in account.event_types))
         query = event_query(account, event)
         if request.attendee_email:
             query["attendeeEmail"] = request.attendee_email
@@ -72,7 +74,8 @@ def prepare_retrieval(ctx: WorkflowContext):
     )):
         return ask(task, destination, continuation, fields=("bookingReference",))
     if request.event_type and task.intent != "reschedule_booking" and not event_for(account, request.event_type):
-        return ask(task, destination, continuation, fields=("eventTypeId",))
+        return ask(task, destination, continuation, fields=("eventTypeId",),
+                   event_names=tuple(item.name for item in account.event_types))
     if request.target_start:
         zone = zone_for(task.time_zone)
         if not zone:
@@ -313,10 +316,11 @@ def offer_slots(task: Task, bounds: Slot):
             for number, slot in enumerate(available, 1)
         )
         return ask(task, "booking", "prepare_booking", slots=available, message=(
-            f"Which available time would you like in {scope}?\n{lines}"
+            f"Which available time would you like in {scope}? Reply with its option number, such as “Option 1”.\n{lines}"
         ), clears_slot=True)
     return ask(task, "booking", "prepare_booking", fields=("range",), message=(
-        f"No alternative slots are available in {scope}. What other time window should I check?"
+        f"No alternative slots are available in {scope}. "
+        "Give a new date and time window, such as “tomorrow from 2 PM to 4 PM”."
     ), clears_slot=True)
 
 

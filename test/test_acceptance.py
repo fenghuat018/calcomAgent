@@ -286,11 +286,21 @@ class SchedulingAcceptance(TestCase):
     def test_reschedule_checks_slot_cancels_and_creates_replacement(self):
         self.set_original()
         self.calcom.slots = [half_hour(utc(5, 16))]
+        self.calcom.bookings["original-uid"]["bookingFieldsResponses"].update({
+            "name": "Alex Rivera", "email": "alex@example.test", "displayEmail": "alex@example.test",
+            "location": {"value": "integrations:cal-video"},
+        })
+
+        def cancel_single_booking(request):
+            self.assertNotIn("cancelSubsequentBookings", request.body)
+            return self.calcom.respond(request)
 
         def create_after_cancel(request):
             self.assertEqual(self.calcom.bookings["original-uid"]["status"], "cancelled")
+            self.assertEqual(request.body["bookingFieldsResponses"], {"topic": "Planning"})
             return self.calcom.respond(request)
 
+        self.calcom.script("POST", CANCEL, cancel_single_booking)
         self.calcom.script("POST", BOOKINGS, create_after_cancel)
         result = self.driver.turn(MOVE)
         self.assertStatus(result, "completed")
@@ -303,6 +313,38 @@ class SchedulingAcceptance(TestCase):
         self.assertLocalSlot(result.replacement.slot, half_hour(utc(5, 16)))
         self.assertIn(result.replacement.uid, self.calcom.bookings)
         self.assertNotEqual(result.replacement.uid, result.original.uid)
+
+    def test_reschedule_reports_rejected_cancellation_and_preserves_original(self):
+        self.set_original()
+        self.calcom.slots = [half_hour(utc(5, 16))]
+        self.calcom.script("POST", CANCEL, error(400, "The request body could not be validated."))
+
+        result = self.driver.turn(MOVE)
+
+        self.assertStatus(result, "failed")
+        self.assertIn("cancelling the original booking (HTTP 400)", result.message)
+        self.assertIn("The request body could not be validated.", result.message)
+        self.assertEqual([request.path for request in self.calcom.writes], [CANCEL])
+        self.assertEqual(result.original.status, "accepted")
+        self.assertIsNone(result.replacement)
+
+    def test_cancel_shows_calcom_validation_detail_with_private_values_redacted(self):
+        self.set_original()
+        response = error(400, "Bad Request")
+        response.payload["error"]["details"] = {"message": [
+            "Booking original-uid cannot be cancelled by alex@example.test.",
+            "The organizer must cancel it.",
+        ]}
+        self.calcom.script("POST", CANCEL, response)
+
+        result = self.driver.turn("Cancel booking original-uid.")
+
+        self.assertStatus(result, "failed")
+        self.assertIn("cancelling the booking (HTTP 400)", result.message)
+        self.assertIn("The organizer must cancel it.", result.message)
+        self.assertNotIn("alex@example.test", result.message)
+        self.assertNotIn("original-uid", result.message)
+        self.assertEqual(self.calcom.bookings["original-uid"]["status"], "accepted")
 
     def test_reschedule_keeps_original_when_destination_is_unavailable(self):
         self.set_original()

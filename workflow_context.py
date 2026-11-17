@@ -141,6 +141,7 @@ class APIError:
     category: str
     retry_after: float = 0
     field: str | None = None
+    provider_detail: str | None = None
 
 
 class Proposal(BaseModel):

@@ -40,7 +40,7 @@ Open [the local scheduling desk](http://127.0.0.1:8501). Use chat for scheduling
 .venv/bin/python main.py "List bookings tomorrow in America/New_York"
 ```
 
-The terminal stays open for answers to scheduling questions. To resume a recoverable task, enter `resume <task-id>` in the same process. After a restart, enter `resume <task-id> <booking-uid-or-id>` to fetch the current booking from Cal.com. Use `--once` for a single turn.
+The terminal stays open for answers to scheduling questions. Reply with a number or an answer to the question just shown. To switch to an older open question, enter its task ID by itself. To resume a recoverable task, enter `resume <task-id>` in the same process. After a restart, enter `resume <task-id> <booking-uid-or-id>` to fetch the current booking from Cal.com. Use `--once` for a single turn.
 
 ## Verify offline
 

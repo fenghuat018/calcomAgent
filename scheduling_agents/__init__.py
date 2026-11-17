@@ -63,7 +63,10 @@ INSTRUCTIONS = {
         "with their dates, zones and offsets. For a single choice, accept an affirmative answer "
         "when it clearly confirms that choice. Leave a field or choice unset when unresolved. "
         "Submit exactly one save_answer call. Use ISO dates and wall times, and use an exclusive "
-        "end for ranges. If the question asks for intent, classify the answer and extract any "
+        "end for ranges. When asked for a new start time, put the date and time from the reply "
+        "in fields.start using the saved timezone and current clock for relative dates. Use "
+        "D+1T10:00:00 for 'tomorrow at 10 AM'. The question's timestamps are context and "
+        "must not be used as the user's answer. If the question asks for intent, classify the answer and extract any "
         "explicit details. The task either returns the saved question or resumes the recorded step."
     ),
     "recovery": (

@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 
 from workflow_context import APIError, Booking, Evidence, Question, Read, Role, Slot, Task, WorkflowContext, Write
 
-from .outcomes import FIELD_NAMES, booking_label, finish, interval_label
+from .outcomes import booking_label, clarification_prompt, finish, interval_label
 
 
 logger = logging.getLogger("calcom.scheduling")
@@ -15,21 +15,21 @@ def ask(
     task: Task, destination: Role, step: str, *, fields: tuple[str, ...] = (),
     bookings: tuple[Booking, ...] = (), slots: tuple[Slot, ...] = (),
     message: str | None = None, clears_slot: bool = False, reconciliation_notice: bool = False,
+    event_names: tuple[str, ...] = (),
 ):
     if message is None:
         if bookings:
-            message = "Which booking do you mean?\n" + "\n".join(
+            message = "Which booking do you mean? Reply with its option number, such as “Option 1”.\n" + "\n".join(
                 f"{index}. {booking_label(booking, task.time_zone)}"
                 for index, booking in enumerate(bookings, 1)
             )
         elif slots:
-            message = "Which time would you like?\n" + "\n".join(
+            message = "Which time would you like? Reply with its option number, such as “Option 1”.\n" + "\n".join(
                 f"{index}. {interval_label(slot, task.time_zone)}"
                 for index, slot in enumerate(slots, 1)
             )
         else:
-            labels = [FIELD_NAMES.get(field, f"the {field.split('.')[-1]} field") for field in fields]
-            message = "Please provide " + ", ".join(labels) + "."
+            message = clarification_prompt(fields, event_names)
     key = task.save("question")
     task.pending = Question(
         key, task.revision, message, destination, step, fields, bookings, slots, clears_slot,

@@ -7,7 +7,10 @@ from datetime import datetime, timedelta
 from tools.calcom_client import UID
 from workflow_context import Answer, Proposal, READ_INTENTS, WRITE_INTENTS, WorkflowContext, iso
 
-from .inputs import DATE, EMAIL, TIME_FIELDS, event_for, expand_relative_dates, source_contains, supports_write, zone_for
+from .inputs import (
+    BOOKING_DETAIL_REQUEST, DATE, EMAIL, INTENT_PREFIX, TIME_FIELDS,
+    event_for, expand_relative_dates, source_contains, supports_write, zone_for,
+)
 from .outcomes import finish
 from .state import ask
 
@@ -36,9 +39,7 @@ EXPLICIT_INTENT = {
     "reschedule_booking": r"(?:reschedule|move|rebook)\b",
     "list_bookings": r"list\b",
     "get_availability": r"(?:show|find|when)\b.*\b(?:available|availability|open slots)\b",
-    "get_booking": r"(?:show (?:me )?details|when and where)\b",
 }
-INTENT_PREFIX = r"^\s*(?:(?:please|can you|could you)\s+)?"
 GENERAL_HELP = re.compile(
     r"(?:i (?:need|want)(?: some)? help|(?:can|could) you help(?: me)?)\s+"
     r"with\s+(?:(?:my|the)\s+)?(?:schedule|scheduling|calendar|appointments|bookings)[.!?]?",
@@ -98,12 +99,14 @@ def normalize_request(ctx: WorkflowContext, proposal: Proposal) -> Proposal:
         return Proposal()
     fields = grounded(proposal, message, ctx.referenced_uid).model_dump()
     intent = fields["intent"]
-    if intent == "unclear":
+    if BOOKING_DETAIL_REQUEST.match(message) and (intent == "unclear" or intent in WRITE_INTENTS):
+        intent = "get_booking"
+    elif intent == "unclear":
         intent = next((
             item for item, pattern in EXPLICIT_INTENT.items()
             if re.search(INTENT_PREFIX + pattern, message, re.I)
         ), intent)
-        fields["intent"] = intent
+    fields["intent"] = intent
     for key in ("event_type", "title_clue"):
         value = fields[key]
         if value and value.strip().casefold() in GENERIC_BOOKING_LABELS:
@@ -229,7 +232,7 @@ def save_intent(ctx: WorkflowContext, proposal: Proposal):
     route_intent(ctx, evidence=task.message)
 
 
-def save_question(ctx: WorkflowContext):
+def save_question(ctx: WorkflowContext, *, retry: bool = False):
     task = ctx.task
     question = task.pending
     if not question or question.revision != task.revision:
@@ -237,7 +240,8 @@ def save_question(ctx: WorkflowContext):
     if question.reconciliation_notice:
         task.pending = None
         return finish(task, "recoverable", question.message, bookings=question.bookings)
-    finish(task, "awaiting_input", question.message, slots=question.slots,
+    message = f"I couldn’t use that reply. {question.message}" if retry else question.message
+    finish(task, "awaiting_input", message, slots=question.slots,
            candidates=question.bookings, fields=question.fields)
 
 
@@ -359,7 +363,7 @@ def save_answer(ctx: WorkflowContext, answer: Answer):
             else answer.fields is not None and apply_fields(ctx, answer.fields)
         )
     if not valid:
-        return save_question(ctx)
+        return save_question(ctx, retry=True)
     task.transition("confirmation", "save_answer", answer=question)
     task.fresh_revision = None
     task.slot_preflight = None

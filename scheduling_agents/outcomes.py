@@ -5,20 +5,34 @@ from workflow_context import Booking, Outcome, Slot, Status, Task
 from .inputs import zone_for
 
 
-FIELD_NAMES = {
-    "intent": "what you would like to do with your schedule",
-    "eventTypeId": "the event type",
-    "attendee.name": "the attendee's name",
-    "attendee.email": "the attendee's email",
-    "attendee.timeZone": "the attendee's IANA time zone (for example, America/New_York)",
-    "timeZone": "the IANA time zone (for example, America/New_York)",
-    "start": "the date and local start time",
-    "range": "the start and end of the time window",
-    "bookingReference": "a booking reference, attendee, title, or meeting date",
-    "lengthInMinutes": "the meeting duration in minutes",
-    "location": "the meeting location",
-    "cancellationReason": "the cancellation reason",
+FIELD_PROMPTS = {
+    "intent": "Tell me what you’d like to do, such as “list my bookings for next week” or “book a meeting”.",
+    "eventTypeId": "Give the exact name of the Cal.com event type you’d like to use.",
+    "attendee.name": "Give the name of the person attending the meeting.",
+    "attendee.email": "Give the attendee’s email address, such as alex@example.com.",
+    "attendee.timeZone": "Give the attendee’s time zone, such as America/New_York.",
+    "timeZone": "Tell me which time zone to use for these dates, such as America/New_York.",
+    "start": "Give the meeting’s date and start time, such as “tomorrow at 10 AM”.",
+    "range": "Give the date and both ends of the time window, such as “tomorrow from 2 PM to 4 PM”.",
+    "bookingReference": "Give the booking reference, or describe the meeting by its attendee, title, or date.",
+    "lengthInMinutes": "Tell me how many minutes the meeting should last.",
+    "location": "Tell me where the meeting should take place.",
+    "cancellationReason": "Give the reason for cancelling the meeting.",
 }
+
+
+def clarification_prompt(fields: tuple[str, ...], event_names: tuple[str, ...] = ()) -> str:
+    prompts = []
+    for field in fields:
+        if field == "eventTypeId" and event_names:
+            choices = ", ".join(f"“{name}”" for name in event_names)
+            prompts.append(f"Choose a Cal.com event type from {choices}.")
+        else:
+            name = field.removeprefix("bookingFieldsResponses.")
+            prompts.append(FIELD_PROMPTS.get(field, f"Give a value for the “{name}” booking field."))
+    if len(prompts) == 1:
+        return prompts[0]
+    return "I need these details to continue.\n" + "\n".join(f"- {prompt}" for prompt in prompts)
 
 
 def interval_label(slot: Slot, zone_name: str | None) -> str:

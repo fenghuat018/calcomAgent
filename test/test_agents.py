@@ -1,5 +1,6 @@
 """Verify the SDK agent definitions, phase gates, and cross-turn checkpoints."""
 
+from dataclasses import replace
 from datetime import timedelta
 from unittest import IsolatedAsyncioTestCase
 
@@ -86,6 +87,117 @@ class WorkflowCheckpoints(IsolatedAsyncioTestCase):
         self.assertEqual(answer.task_id, pending.task_id)
         self.assertTrue(answer.handoffs)
         self.assertTrue(all(item.task_id == pending.task_id for item in answer.handoffs))
+
+    async def test_booking_detail_requests_start_fresh_while_a_time_window_is_pending(self):
+        requests = (
+            "what is the time of the meeting with alice",
+            "check the detail of my meeting with alice",
+        )
+
+        class BookingDetailsInterpreter(AcceptanceInterpreter):
+            @staticmethod
+            def _interpret_request(message):
+                if message in requests:
+                    return {"attendee_clue": "Alice"}
+                return AcceptanceInterpreter._interpret_request(message)
+
+        workflow = Driver(self.environment, model=BookingDetailsInterpreter()).workflow
+        self.calcom.slots = []
+        self.calcom.bookings["alice-uid"] = booking("alice-uid", utc(5, 16), name="Alice")
+        pending = await workflow.turn(CREATE, self.conversation)
+        self.assertEqual((pending.status, pending.missing_fields), ("awaiting_input", ("range",)))
+
+        for message in requests:
+            with self.subTest(message=message):
+                await workflow.resume(pending.task_id, self.conversation)
+                result = await workflow.turn(message, self.conversation)
+                self.assertEqual(result.status, "completed", result.message)
+                self.assertNotEqual(result.task_id, pending.task_id)
+                self.assertEqual([item.calcom_uid for item in result.bookings], ["alice-uid"])
+                self.assertIn("11:00 AM", result.message)
+                self.assertEqual(
+                    [(handoff.source, handoff.target) for handoff in result.handoffs],
+                    [("triage", "retrieval")],
+                )
+
+        original = await workflow.resume(pending.task_id, self.conversation)
+        self.assertEqual(original.question_key, pending.question_key)
+        self.assertEqual(original.message, pending.message)
+        self.assertEqual(self.calcom.writes, [])
+
+    async def test_bare_option_answers_the_latest_question_with_an_older_task_pending(self):
+        older = await self.workflow.turn(CREATE.replace(", alex@example.test", ""), self.conversation)
+        self.calcom.bookings["original-uid"] = booking("original-uid", utc(5, 15))
+        self.calcom.bookings["other-uid"] = booking("other-uid", utc(5, 16), numeric_id=102)
+        latest = await self.workflow.turn(
+            "Cancel my call with Alex on November 5, America/New_York.", self.conversation,
+        )
+        self.assertEqual(older.status, "awaiting_input")
+        self.assertEqual(latest.status, "awaiting_input")
+        self.assertNotEqual(older.task_id, latest.task_id)
+        self.assertEqual([item.calcom_uid for item in latest.candidates], ["original-uid", "other-uid"])
+
+        result = await self.workflow.turn("1", self.conversation)
+        self.assertEqual((result.status, result.task_id), ("completed", latest.task_id))
+        self.assertEqual([request.path for request in self.calcom.writes], [f"{BOOKINGS}/original-uid/cancel"])
+        self.assertEqual(self.calcom.bookings["other-uid"]["status"], "accepted")
+        still_pending = await self.workflow.resume(older.task_id, self.conversation)
+        self.assertEqual(still_pending.question_key, older.question_key)
+
+    async def test_bare_task_reference_reopens_its_question_for_the_next_reply(self):
+        older = await self.workflow.turn(CREATE.replace(", alex@example.test", ""), self.conversation)
+        newer = await self.workflow.turn(CREATE.replace(" The topic is Planning.", ""), self.conversation)
+        listing = await self.workflow.turn(f"List bookings for {RANGE}.", self.conversation)
+        self.assertEqual((older.status, newer.status, listing.status),
+                         ("awaiting_input", "awaiting_input", "completed"))
+
+        ambiguous = await self.workflow.turn("alex@example.test", self.conversation)
+        self.assertIn("Which task are you answering?", ambiguous.message)
+        reopened = await self.workflow.turn(older.task_id, self.conversation)
+        self.assertEqual((reopened.task_id, reopened.question_key), (older.task_id, older.question_key))
+        self.assertEqual(reopened.message, older.message)
+        self.assertEqual(reopened.handoffs, ())
+        self.assertEqual(self.calcom.writes, [])
+
+        result = await self.workflow.turn("alex@example.test", self.conversation)
+        self.assertEqual((result.status, result.task_id), ("completed", older.task_id))
+        self.assertEqual(len(self.calcom.writes), 1)
+        still_pending = await self.workflow.resume(newer.task_id, self.conversation)
+        self.assertEqual(still_pending.question_key, newer.question_key)
+
+    async def test_past_time_clarification_explains_rejection_and_accepts_a_future_reply(self):
+        class TimeReplies(AcceptanceInterpreter):
+            @staticmethod
+            def _interpret_answer(message, context):
+                starts = {
+                    "12:15 AM today": "D+0T00:15:00",
+                    "tomorrow at 10 AM": "D+1T10:00:00",
+                }
+                return {"fields": {"start": starts[message]}} if message in starts else {}
+
+        environment = replace(self.environment, now=utc(5, 14))
+        workflow = Driver(environment, model=TimeReplies()).workflow
+        self.calcom.slots = [Slot(utc(6, 15), utc(6, 15, 30))]
+        first = await workflow.turn(CREATE.replace("10 AM", "12:00 AM"), self.conversation)
+        self.assertEqual(first.status, "awaiting_input")
+        self.assertEqual(first.missing_fields, ("start",))
+        self.assertIn("12:00 AM (EST) has already passed", first.message)
+        self.assertIn("09:00 AM (EST) in America/New_York", first.message)
+        self.assertIn("tomorrow at 10 AM", first.message)
+
+        repeated = await workflow.turn("12:15 AM today", self.conversation)
+        self.assertEqual(repeated.task_id, first.task_id)
+        self.assertIn("12:15 AM (EST) has already passed", repeated.message)
+        unclear = await workflow.turn("whenever", self.conversation)
+        self.assertIn("I couldn’t use that reply", unclear.message)
+        self.assertIn("later date and time", unclear.message)
+        self.assertEqual(self.calcom.requests, [])
+
+        booked = await workflow.turn("tomorrow at 10 AM", self.conversation)
+        self.assertEqual(booked.status, "completed")
+        self.assertEqual(booked.task_id, first.task_id)
+        self.assertEqual(booked.bookings[0].slot.start, utc(6, 15))
+        self.assertEqual(len(self.calcom.writes), 1)
 
     async def test_replayed_turn_id_returns_saved_outcome(self):
         first = await self.workflow.turn(CREATE, self.conversation, turn_id="turn-1")

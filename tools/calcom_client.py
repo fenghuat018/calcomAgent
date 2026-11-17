@@ -131,12 +131,20 @@ def normalize_slots(data, bounds: Slot) -> tuple[Slot, ...]:
     return tuple(sorted(slot for slot in slots if bounds.start <= slot.start and slot.end <= bounds.end))
 
 
-def error_details(method, endpoint, status, payload, retry_after=0) -> APIError:
+def error_details(method, endpoint, status, payload, retry_after=0, *, redact=()) -> APIError:
     details = payload.get("error", {}) if isinstance(payload, dict) else {}
-    message = text(details.get("message") if isinstance(details, dict) else details)
-    code = text(details.get("code")) if isinstance(details, dict) else ""
+    if isinstance(details, dict):
+        nested = details.get("details")
+        nested_message = nested.get("message") if isinstance(nested, dict) else None
+        if isinstance(nested_message, list):
+            nested_message = " ".join(item for item in nested_message if isinstance(item, str))
+        message = text(nested_message) or text(details.get("message"))
+        code = text(details.get("code"))
+    else:
+        message, code = text(details), ""
     provider_text = f"{code} {message}".casefold()
     field = None
+    provider_detail = None
     if status in (401, 403):
         category, summary = "authorization", "Cal.com refused access. Check the account and API key."
     elif status == 404:
@@ -154,12 +162,18 @@ def error_details(method, endpoint, status, payload, retry_after=0) -> APIError:
             r"start|lengthInMinutes|location|cancellationReason)\b", f"{code} {message}",
         )
         field = match.group(1) if match else None
+        if message:
+            for value in redact:
+                message = message.replace(value, "[redacted]")
+            message = re.sub(r"https?://\S+|[^\s<>]+@[^\s<>]+", "[redacted]", message)
+            message = "".join(char if char.isprintable() else " " for char in message)
+            provider_detail = " ".join(message.split())[:350] or None
     elif status >= 500 or status == 408 or 200 <= status < 300:
         category = "uncertain" if method == "POST" else "temporary"
         summary = "Cal.com returned an unavailable or invalid response."
     else:
         category, summary = "rejected", "Cal.com rejected the request."
-    return APIError(method, BASE_URL + endpoint, {}, status, summary, category, retry_after, field)
+    return APIError(method, BASE_URL + endpoint, {}, status, summary, category, retry_after, field, provider_detail)
 
 
 class CalCom:
@@ -196,8 +210,12 @@ class CalCom:
                     return result
             except (AttributeError, KeyError, IndexError, TypeError, ValueError, OverflowError):
                 pass
+        sensitive = (self._api_key,)
+        if "{bookingUid}" in endpoint:
+            sensitive += (path.split("/")[3],)
         error = error_details(
             method, endpoint, response.status, envelope, retry_delay(response.headers, self._clock()),
+            redact=sensitive,
         )
         raise ProviderFailure(replace(error, request_body=redacted_body))
 

@@ -8,7 +8,7 @@ from workflow_context import Read, Slot, WorkflowContext, Write, instant
 
 from tools.booking import alternatives, availability_query, response_matches
 from .inputs import zone_for
-from .outcomes import booking_label, finish
+from .outcomes import booking_label, clarification_prompt, finish
 from tools.retrieval import listing, not_found, offer_slots
 from .state import ask, finish_write, read_for
 
@@ -120,9 +120,22 @@ async def recover_write(ctx: WorkflowContext):
             return resume_booking(task, "Retry the definitively unapplied write after revalidation.")
         if operation.retry_at and operation.attempts < MAX_ATTEMPTS:
             return finish(task, "recoverable", f"{error.error_message} Resume task {task.id} after the retry delay.")
-    if error.category == "invalid_input" and error.field:
-        fields = (error.field,)
-        return ask(task, "booking", "prepare_booking", fields=fields)
+    if error.category == "invalid_input":
+        if error.field and (operation.kind == "create_booking" or error.field == "cancellationReason"):
+            fields = (error.field,)
+            prompt = clarification_prompt(fields)
+            message = f"{error.provider_detail}\n{prompt}" if error.provider_detail else prompt
+            return ask(task, "booking", "prepare_booking", fields=fields, message=message)
+        if operation.kind == "cancel_booking" or task.intent == "reschedule_booking":
+            if operation.kind == "cancel_booking":
+                step = "cancelling the original booking" if task.intent == "reschedule_booking" else "cancelling the booking"
+            else:
+                step = "creating the replacement booking"
+            detail = f" {error.provider_detail}" if error.provider_detail else ""
+            return finish(task, "failed", (
+                f"Cal.com rejected the request for {step} (HTTP {error.error_code})."
+                f"{detail} Request reference {operation.id}."
+            ))
     if error.category == "missing" and operation.kind == "cancel_booking":
         task.reference_uid = None
         task.selected_booking = None
