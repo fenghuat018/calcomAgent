@@ -1,6 +1,6 @@
 # calcomAgent
 
-A terminal scheduling assistant with five agents for intake, booking changes, retrieval, clarification, and recovery. See the [scheduling specification](spec.md) and [agent creation plan](plan/agent-creation-plan.md).
+A scheduling assistant with Streamlit and terminal interfaces. Five agents handle intake, booking changes, retrieval, clarification, and recovery. See the [scheduling specification](spec.md) and [agent creation plan](plan/agent-creation-plan.md).
 
 ## Setup
 
@@ -24,6 +24,16 @@ Use the IDs and booking fields of event types already configured in the authoriz
 Optional defaults are `CALCOM_TIME_ZONE` (an IANA zone), `CALCOM_ATTENDEE_NAME`, and `CALCOM_ATTENDEE_EMAIL`. Set `OPENAI_MODEL` to override `gpt-5-mini`.
 
 ## Run
+
+### Streamlit
+
+```sh
+.venv/bin/python -m streamlit run streamlit_app.py
+```
+
+Open [the local scheduling desk](http://127.0.0.1:8501). Use chat for scheduling requests and the sidebar to review details, choose a booking or time, and resume paused requests. Each browser session holds its own conversation in memory. The local server uses the single Cal.com account configured above.
+
+### Terminal
 
 ```sh
 .venv/bin/python main.py

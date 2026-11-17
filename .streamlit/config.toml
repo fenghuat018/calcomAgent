@@ -1,0 +1,21 @@
+[server]
+address = "127.0.0.1"
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+base = "light"
+font = "'Source Sans 3', sans-serif"
+headingFont = "'PT Serif', serif"
+primaryColor = "#285e4b"
+backgroundColor = "#fcfbf7"
+secondaryBackgroundColor = "#f1f3eb"
+textColor = "#202d27"
+borderColor = "#d4dcd1"
+showSidebarBorder = true
+baseRadius = "medium"
+
+[theme.sidebar]
+backgroundColor = "#edf1e8"
+secondaryBackgroundColor = "#fcfbf7"
